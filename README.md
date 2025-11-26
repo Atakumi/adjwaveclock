@@ -203,6 +203,8 @@ sudo timedatectl set-ntp true
 - Requires external amplifier and antenna for wireless transmission
 - Summer time flag is hardcoded to `False` (Japan does not use DST)
 - Leap second list must be manually updated
+- No consideration for timezone
+- "second" timing (aka marker) relies on software/timer, so it might be inacurate. We might need more accurate timebase, such as PPS of GPS/RTC
 
 ## License
 
@@ -210,6 +212,7 @@ This is an educational implementation of the JJY time signal standard.
 
 ## References
 
-- JJY Time Signal Standard (NICT)
-- Japanese Standard Time Signal Format
-- Raspberry Pi GPIO/PWM Documentation
+- [JJY Time Signal Standard (NICT)](https://www.nict.go.jp/en/sts/jjy.html)
+- [Japanese Standard Time Signal Format](https://www.nict.go.jp/en/sts/jjy_signal.html)
+- [The pigpio Library](https://abyz.me.uk/rpi/pigpio/)
+- [Web JJY](https://github.com/shogo82148/web-jjy)
