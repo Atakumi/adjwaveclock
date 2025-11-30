@@ -2,13 +2,17 @@ import pigpio
 import time
 import threading
 import sys
-import datetime
+# import datetime
 from datetime import datetime, timedelta
+import zoneinfo
 import math
 
 PWM_GPIO = 18       # BCM pin for PWM output
 FREQ_HZ = 60000     # PWM frequency in Hz (60 kHz)
 DUTY_CYCLE = 500000 # Duty cycle in range 0..1_000_000 (50%)
+
+# specify timezone in case system timezone is not in JST
+tz = zoneinfo.ZoneInfo("Asia/Tokyo")
 
 pi = pigpio.pi()
 if not pi.connected:
@@ -21,13 +25,14 @@ class JJYGenerator:
         self.stop_flag = False
         
         # list of leap seconds (Japan time)
+        # TODO: we might need to have this in UTC?
         self.plus_leapsecond_list = [
-            datetime(2017, 1, 1, 9)
+            datetime(2017, 1, 1, 9, tzinfo=tz)
         ]
     
     def getleapsecond(self):
         """Leap second +1: inserted within a month -1: removed within a month 0: none"""
-        now = datetime.now()
+        now = datetime.now(tz)
         for leap_date in self.plus_leapsecond_list:
             diff = (leap_date - now).total_seconds()
             if 0 < diff <= 31 * 24 * 60 * 60:
@@ -46,9 +51,9 @@ class JJYGenerator:
     
     def schedule(self, date, summer_time):
         """Schedule PWM signals for a minute"""
-        print(f"Starting JJY signal for {date.strftime('%Y-%m-%d %H:%M')}")
         minute = date.minute
         hour = date.hour
+        print(f"Signal for {hour}:{minute:02d}")
         fullyear = date.year
         year = fullyear % 100
         week_day = date.weekday()
@@ -58,7 +63,7 @@ class JJYGenerator:
             week_day += 1
         
         # Calculate day of year
-        year_start = datetime(date.year, 1, 1)
+        year_start = datetime(date.year, 1, 1, tzinfo=tz)
         year_day = (date.replace(hour=0, minute=0, second=0, microsecond=0) - year_start).days + 1
         
         leapsecond = self.getleapsecond()
@@ -76,12 +81,12 @@ class JJYGenerator:
             pa += 1 if b else 0
             duration = 0.5 if b else 0.8
             self.generate_mark(duration)
-            print(f"bit {'1' if b else '0'} (weight {weight})")
+            # print(f"bit {'1' if b else '0'} (weight {weight})")
             return value
         
         # Marker (M)
         marker()
-        print("mark P0")
+        # print("mark P0")
         
         # Minute
         pa = 0
@@ -96,7 +101,7 @@ class JJYGenerator:
         pa2 = pa
         
         marker()  # P1 - 9
-        print("mark P1")
+        # print("mark P1")
         
         # Hour
         pa = 0
@@ -112,7 +117,7 @@ class JJYGenerator:
         pa1 = pa
         
         marker()  # P2 - 19
-        print("mark P2")
+        # print("mark P2")
         
         # Day of year since January 1
         year_day = bit(year_day, 800) # 20
@@ -126,7 +131,7 @@ class JJYGenerator:
         year_day = bit(year_day, 10) # 28
         
         marker()  # P3 - 29
-        print("mark P3")
+        # print("mark P3")
         
         year_day = bit(year_day, 8) # 30
         year_day = bit(year_day, 4) # 31
@@ -140,7 +145,7 @@ class JJYGenerator:
         bit(0, 1)  # SU1 - 38
         
         marker()  # P4 - 39 
-        print("mark P4")
+        # print("mark P4")
         
         # SU2
         if summer_time:
@@ -160,7 +165,7 @@ class JJYGenerator:
         year = bit(year, 1)  # 48
         
         marker()  # P5 - 49
-        print("mark P5")
+        # print("mark P5")
         
         # Weekday
         week_day = bit(week_day, 4) # 50
@@ -187,36 +192,45 @@ class JJYGenerator:
         bit(0, 1)  # 0 - 58
         
         marker(True)  # P6 - 59 // Short marker, so we have 0.9 seconds of silence before the next minute
-        print("mark P6")
+        # print("mark P6")
         return
         
     def start(self):
         """Start generating JJY signals"""
         
         self.stop_flag = False
-        now = time.time() * 1000  # milliseconds
+        now = datetime.now(tz).timestamp() * 1000  # milliseconds
         t = math.floor(now / (60 * 1000)) * 60 * 1000
         next_minute = t + 60 * 1000
         delay = (next_minute - now - 1000) / 1000  # Set timer slightly before exactly 0 seconds of each minute
         if delay < 0:
             delay += 60
-        print(f"JJY signal will start in {delay:.2f} seconds")
+        print(f"JJY signal will (re)start in {delay:.2f} seconds")
         t = next_minute
 
         def timer_callback():
             nonlocal t
+            datenext = datetime.fromtimestamp(t / 1000, tz)
+            if datenext.minute == 59:
+                print("We would wait for 00 min to sync with RTC")
+                time.sleep(3)
+                self.stop()
+                return
             if not self.stop_flag:
                 timer = threading.Timer(60.0, timer_callback)
                 timer.daemon = True
                 self.interval_timer = timer
                 timer.start()
-                self.schedule(datetime.fromtimestamp(t / 1000), False)
+                self.schedule(datenext, False)
                 t += 60 * 1000
         
         timer = threading.Timer(delay, timer_callback)
-        timer.daemon = False
+        timer.daemon = True
         self.interval_timer = timer
         timer.start()
+
+    def isStopped(self):
+        return self.stop_flag
     
     def stop(self):
         """Stop generating JJY signals"""
@@ -230,10 +244,10 @@ def main():
     try:
         generator = JJYGenerator()
         print("Starting JJY signal generator...")
-        generator.start()
-
         while True:
-            time.sleep(1)
+            generator.start()
+            while not generator.isStopped():
+                time.sleep(5)
 
     except KeyboardInterrupt:
         print("\nInterrupted by user. Stopping JJY...")
